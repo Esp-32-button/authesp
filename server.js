@@ -1,83 +1,88 @@
+// server.js (Backend on Render)
+
 const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
-const { Pool } = require('pg');
-const cors = require('cors');
 require('dotenv').config();
 
+// Setup express app
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 app.use(cors());
 
-// PostgreSQL connection
+// Database setup
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }, // Required for Supabase
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
 });
 
-// Secret key for JWT
-const JWT_SECRET = 'oqWHRLfwaL5kw04/pBTeNwlZ8R8xZNeGpcWgnRMoZodVRdX6CUdiuTiJApR1WitePXm2HTDSE5sSYQO1AX54rw==';
+// JWT Secret Key
+const JWT_SECRET = process.env.JWT_SECRET || 'oqWHRLfwaL5kw04/pBTeNwlZ8R8xZNeGpcWgnRMoZodVRdX6CUdiuTiJApR1WitePXm2HTDSE5sSYQO1AX54rw==';
 
-// User Registration
+// Endpoint to handle user registration
 app.post('/register', async (req, res) => {
-    const { email, password } = req.body;
+  const { username, password } = req.body;
+  const hashedPassword = await bcrypt.hash(password, 10);
 
-    try {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const result = await pool.query(
-            'INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *',
-            [email, hashedPassword]
-        );
-        res.status(201).json({ message: 'User registered successfully', user: result.rows[0] });
-    } catch (error) {
-        res.status(400).json({ error: 'User already exists or invalid input' });
-    }
+  try {
+    const result = await pool.query(
+      'INSERT INTO users (username, password) VALUES ($1, $2) RETURNING id, username',
+      [username, hashedPassword]
+    );
+    res.status(201).json({ user: result.rows[0] });
+  } catch (error) {
+    res.status(500).json({ error: 'User registration failed' });
+  }
 });
 
-// User Login
+// Endpoint to handle login
 app.post('/login', async (req, res) => {
-    const { email, password } = req.body;
+  const { username, password } = req.body;
 
-    try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-        if (result.rows.length === 0) {
-            return res.status(400).json({ error: 'User not found' });
-        }
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
 
-        const user = result.rows[0];
-        const isPasswordValid = await bcrypt.compare(password, user.password);
-
-        if (!isPasswordValid) {
-            return res.status(400).json({ error: 'Invalid password' });
-        }
-
-        const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '1h' });
-        res.json({ message: 'Login successful', token });
-    } catch (error) {
-        res.status(500).json({ error: 'Internal server error' });
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'User not found' });
     }
+
+    const user = result.rows[0];
+    const passwordMatch = await bcrypt.compare(password, user.password);
+
+    if (!passwordMatch) {
+      return res.status(400).json({ error: 'Incorrect password' });
+    }
+
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
+    res.status(200).json({ token });
+  } catch (error) {
+    res.status(500).json({ error: 'Login failed' });
+  }
 });
 
-// LED State Management
 let ledState = "OFF";
 
-app.get('/led', (req, res) => {
-    res.json({ ledState });
+// Endpoint to get LED state
+app.get('/led-state', (req, res) => {
+    res.send(ledState);
 });
 
-app.post('/led', (req, res) => {
+// Endpoint to set LED state
+app.post('/control-led', (req, res) => {
     const { state } = req.body;
     if (state === "ON" || state === "OFF") {
         ledState = state;
-        res.json({ message: `LED state set to ${state}` });
+        console.log(`LED state set to ${state}`);
+        res.status(200).send({ message: `LED state set to ${state}` });
     } else {
-        res.status(400).json({ error: "Invalid state" });
+        res.status(400).send({ message: "Invalid state" });
     }
 });
 
-// Start server
+ 
+// Start the server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-});
-
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
